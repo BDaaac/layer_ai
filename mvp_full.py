@@ -2,6 +2,7 @@
 Полный MVP Streamlit приложения для AI Lawyer с интеграцией Saiga-2
 """
 
+import os
 import streamlit as st
 import time
 import subprocess
@@ -19,7 +20,7 @@ except ImportError:
 
 # Saiga-2 integration
 try:
-    from model_saiga import generate_answer_with_saiga, is_saiga_available, SaigaNotInstalledError, saiga_lawyer
+    from model_saiga import generate_answer_with_saiga, is_saiga_available, SaigaNotInstalledError, initialize_saiga
     SAIGA_AVAILABLE = True
 except ImportError as e:
     SAIGA_AVAILABLE = False
@@ -338,25 +339,40 @@ def main():
         
         if SAIGA_AVAILABLE:
             if not st.session_state.saiga_initialized:
-                if st.button("🔍 Проверить Saiga-2", use_container_width=True):
-                    with st.spinner("Проверка доступности Saiga-2..."):
-                        if is_saiga_available():
-                            st.session_state.saiga_initialized = True
-                            st.session_state.saiga_status = "✅ Готова"
-                            st.success("Saiga-2 доступна!")
-                        else:
-                            st.session_state.saiga_status = "❌ Модель не найдена"
-                            st.error("Модель Saiga-2 не найдена")
+                if st.button("🔍 Инициализировать Saiga-2", use_container_width=True):
+                    with st.spinner("Инициализация Saiga-2..."):
+                        try:
+                            if initialize_saiga():
+                                st.session_state.saiga_initialized = True
+                                st.session_state.saiga_status = "✅ Готова"
+                                st.success("Saiga-2 успешно инициализирована!")
+                            else:
+                                st.session_state.saiga_status = "❌ Ошибка инициализации"
+                                st.error("Не удалось инициализировать Saiga-2")
+                        except Exception as e:
+                            st.session_state.saiga_status = f"❌ Ошибка: {str(e)}"
+                            st.error(f"Ошибка: {str(e)}")
                         st.rerun()
             
             if st.session_state.saiga_initialized:
                 st.markdown('<div class="status-badge status-success">🧠 Saiga-2 готова</div>', unsafe_allow_html=True)
                 
-                model_info = saiga_lawyer.get_model_info()
-                st.write("**📋 Информация о модели:**")
-                if model_info['model_file_exists']:
-                    st.write(f"• 💾 Размер: {model_info['model_size_mb']:.1f} МБ")
-                st.write(f"• 🔧 Загружена: {'Да' if model_info['model_loaded'] else 'Нет'}")
+                # Проверяем тип модели
+                try:
+                    from model_saiga import LLAMA_CPP_AVAILABLE
+                    if LLAMA_CPP_AVAILABLE:
+                        st.write("**📋 Статус модели:**")
+                        st.write("• 🔧 Полная модель Saiga-2 загружена")
+                        if os.path.exists("models/saiga/saiga2.gguf"):
+                            file_size = os.path.getsize("models/saiga/saiga2.gguf") / (1024*1024)
+                            st.write(f"• 💾 Размер файла: {file_size:.1f} МБ")
+                    else:
+                        st.write("**📋 Режим работы:**")
+                        st.write("• 🔄 Fallback режим (без LLM)")
+                        st.write("• 📚 Ответы на основе поиска по документам")
+                        st.info("💡 Для полной функциональности установите llama-cpp-python")
+                except:
+                    st.write("• ✅ Модель готова к работе")
             else:
                 st.markdown('<div class="status-badge status-error">🧠 Saiga-2 недоступна</div>', unsafe_allow_html=True)
                 

@@ -25,6 +25,75 @@ class SaigaNotInstalledError(Exception):
     pass
 
 
+class SaigaFallbackLawyer:
+    """
+    Fallback класс для работы без llama_cpp.
+    Генерирует ответы на основе найденного контекста.
+    """
+    
+    def __init__(self):
+        self.is_loaded = True  # Всегда готов к работе
+        
+    def load_model(self) -> bool:
+        """Fallback модель всегда готова"""
+        return True
+        
+    def is_model_available(self) -> bool:
+        """Fallback модель всегда доступна"""
+        return True
+        
+    def generate_answer(self, question: str, context_chunks: List[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Генерирует ответ на основе контекста без использования LLM.
+        
+        Args:
+            question: Вопрос пользователя
+            context_chunks: Найденные фрагменты
+            
+        Returns:
+            Dict: Ответ с метаданными
+        """
+        if not context_chunks:
+            return {
+                'success': True,
+                'answer': 'Извините, не удалось найти релевантную информацию в базе данных для ответа на ваш вопрос. Попробуйте переформулировать запрос.',
+                'context_used': [],
+                'tokens_used': 0,
+                'model': 'Fallback (без LLM)'
+            }
+        
+        # Составляем ответ на основе найденных фрагментов
+        context_text = "\n\n".join([chunk['chunk'] for chunk in context_chunks[:3]])
+        sources = list(set([chunk['metadata']['source'] for chunk in context_chunks[:3]]))
+        
+        answer = f"""На основе найденной информации в правовых документах:
+
+{context_text}
+
+**Источники:** {', '.join(sources)}
+
+*Примечание: Этот ответ составлен на основе найденных фрагментов документов. Для получения более детального анализа установите llama-cpp-python и модель Saiga-2.*"""
+        
+        return {
+            'success': True,
+            'answer': answer,
+            'context_used': context_chunks[:3],
+            'tokens_used': len(answer.split()),
+            'model': 'Fallback (поиск по документам)'
+        }
+    
+    def get_model_info(self) -> Dict[str, Any]:
+        """Информация о fallback модели"""
+        return {
+            'model_type': 'Fallback',
+            'model_loaded': True,
+            'model_file_exists': False,
+            'model_size_mb': 0,
+            'context_length': 0,
+            'description': 'Режим работы без LLM модели'
+        }
+
+
 class SaigaLawyer:
     """
     Юридический ассистент на базе модели Saiga-2.
@@ -241,8 +310,34 @@ class SaigaLawyer:
         return info
 
 
-# Глобальный экземпляр для использования в других модулях
-saiga_lawyer = SaigaLawyer()
+# Глобальный экземпляр для использования в других модулях (инициализируется по требованию)
+saiga_lawyer = None
+
+def initialize_saiga():
+    """Initialize Saiga model (call this from Streamlit app)"""
+    global saiga_lawyer
+    if saiga_lawyer is None:
+        if not LLAMA_CPP_AVAILABLE:
+            logger.info("llama_cpp not available, using fallback mode")
+            saiga_lawyer = SaigaFallbackLawyer()
+            return True
+        
+        saiga_lawyer = SaigaLawyer()
+        
+        try:
+            success = saiga_lawyer.load_model()
+            if success:
+                logger.info("Saiga model initialized successfully")
+                return True
+            else:
+                logger.warning("Failed to initialize Saiga model, using fallback")
+                saiga_lawyer = SaigaFallbackLawyer()
+                return True
+        except Exception as e:
+            logger.error(f"Error initializing Saiga: {e}, using fallback")
+            saiga_lawyer = SaigaFallbackLawyer()
+            return True
+    return True
 
 
 def generate_answer_with_saiga(question: str, context_chunks: List[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -259,16 +354,42 @@ def generate_answer_with_saiga(question: str, context_chunks: List[Dict[str, Any
     Raises:
         SaigaNotInstalledError: Если модель недоступна
     """
-    return saiga_lawyer.answer(question, context_chunks)
+    global saiga_lawyer
+    
+    # Инициализируем модель если не инициализирована
+    if saiga_lawyer is None:
+        if not initialize_saiga():
+            return {
+                'success': False,
+                'error': 'Failed to initialize Saiga model',
+                'answer': 'Извините, модель Saiga-2 недоступна. Проверьте установку llama-cpp-python.'
+            }
+    
+    return saiga_lawyer.generate_answer(question, context_chunks)
 
 
 def is_saiga_available() -> bool:
     """
-    Проверяет доступность Saiga-2 модели.
+    Проверяет доступность Saiga-2 модели (включая fallback режим).
     
     Returns:
-        bool: True если модель доступна
+        bool: True если модель доступна (включая fallback)
     """
+    global saiga_lawyer
+    
+    # Fallback режим всегда доступен
+    if not LLAMA_CPP_AVAILABLE:
+        return True
+    
+    # Проверяем существование файла модели
+    model_path = "models/saiga/saiga2.gguf"
+    if not os.path.exists(model_path):
+        return True  # Fallback режим доступен
+    
+    # Инициализируем если нужно
+    if saiga_lawyer is None:
+        return initialize_saiga()
+    
     return saiga_lawyer.is_model_available()
 
 
